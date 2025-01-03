@@ -76,10 +76,10 @@ WSGI_APPLICATION = 'wallet.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres',
-        'PASSWORD': 'postgres',
-        'HOST': 'localhost',
+        'NAME': 'wallet_db',
+        'USER': 'user',
+        'PASSWORD': 'wallet_ps',  # Обновлено на соответствующий пароль
+        'HOST': 'db',
         'PORT': '5432',
     }
 }
