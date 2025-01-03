@@ -1,12 +1,12 @@
+from .constants import ERROR_MESSAGES
 from .models import Wallet, OperationType
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
-from rest_framework.exceptions import ParseError
-from django.db import IntegrityError
 from .serializers import WalletSerializer
+from decimal import Decimal
 
 
 class WalletListCreate(generics.ListCreateAPIView):
@@ -35,33 +35,57 @@ class WalletDetail(generics.RetrieveAPIView):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def perform_operation(request, wallet_uuid):
+    """
+    Обрабатывает операцию над кошельком (DEPOSIT или WITHDRAW).
+    :param request: HTTP запрос.
+    :param wallet_uuid: UUID кошелька.
+    """
     try:
         with transaction.atomic():
+            # Попытка получить кошелек с блокировкой на уровне записи в БД
             wallet = Wallet.objects.select_for_update().get(uuid=wallet_uuid)
             if wallet.user != request.user:
-                return Response({'error': 'You do not have permission to perform operations on this wallet'},
+                return Response({'error': ERROR_MESSAGES["permission_denied"]},
                                 status=status.HTTP_403_FORBIDDEN)
 
-            operation_type = request.data.get('operationType')
-            amount = request.data.get('amount')
+            # Извлечение данных из тела запроса
+            operation_type = request.data.get('operationType')  # ключ 'operationType' — обязательный
+            amount = request.data.get('amount')  # ключ 'amount' — обязательный
 
+            # Проверка operationType
             if operation_type not in [OperationType.DEPOSIT, OperationType.WITHDRAW]:
-                return Response({'error': 'Invalid operation type'}, status=status.HTTP_400_BAD_REQUEST)
-            if amount <= 0:
-                return Response({'error': 'Amount must be greater than zero'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': ERROR_MESSAGES["invalid_operation"]},
+                                status=status.HTTP_400_BAD_REQUEST)
 
+            # Проверка, что amount передан корректно (является положительным числом)
+            try:
+                amount = Decimal(amount)
+                if amount <= 0:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return Response({'error': ERROR_MESSAGES["invalid_amount"]},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # Выполнение операции
             if operation_type == OperationType.DEPOSIT:
-                wallet.deposit(amount)
+                wallet.balance += amount
             elif operation_type == OperationType.WITHDRAW:
-                wallet.withdraw(amount)
+                if wallet.balance < amount:
+                    return Response({'error': ERROR_MESSAGES["insufficient_funds"]},
+                                    status=status.HTTP_400_BAD_REQUEST)
+                wallet.balance -= amount
+            wallet.save()
 
-            return Response({'balance': str(wallet.balance)}, status=status.HTTP_200_OK)
+            # Формируем успешный ответ с обновленным балансом
+            return Response({
+                'operation_type': operation_type,
+                'amount': str(amount),
+                'balance': str(wallet.balance)
+            }, status=status.HTTP_200_OK)
 
     except Wallet.DoesNotExist:
-        return Response({'error': 'Wallet not found'}, status=status.HTTP_404_NOT_FOUND)
-    except ValueError as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    except ParseError:
-        return Response({'error': 'Invalid JSON format'}, status=status.HTTP_400_BAD_REQUEST)
-    except IntegrityError:
-        return Response({'error': 'Database integrity error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': ERROR_MESSAGES["wallet_not_found"]}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        # Унифицированная обработка любых других возможных ошибок
+        return Response({'error': f'An unexpected error occurred: {str(e)}'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR)

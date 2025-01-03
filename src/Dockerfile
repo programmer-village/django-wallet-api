@@ -1,27 +1,29 @@
-# Dockerfile
 FROM python:3.12
 
-# Устанавливаем системные зависимости
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
+# Установим системные зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Устанавливаем рабочую директорию
-WORKDIR /app
-
-# Устанавливаем Poetry
+# Установим Poetry
 RUN pip install poetry
 
-# Копируем файлы pyproject.toml и poetry.lock
+# Установим переменную окружения для работы Poetry
+# (Poetry по умолчанию использует виртуальные окружения, но мы отключим это
+# для совместимости с контейнером)
+ENV POETRY_VIRTUALENVS_CREATE=false
+
+# Установим рабочую директорию
+WORKDIR /app
+
+# Скопируем описание зависимостей
 COPY pyproject.toml poetry.lock* /app/
 
-# Устанавливаем зависимости
-RUN poetry install --no-interaction --no-ansi
+# Установим зависимости приложения
+RUN poetry install --no-root
 
-# Копируем остальной код приложения
+# Копируем оставшийся код приложения в контейнер
 COPY . /app/
 
-# Запускаем приложение
-CMD ["poetry", "run", "python", "manage.py", "runserver", "0.0.0.0:8000"]
+# Команда для запуска приложения (сначала миграции, потом запуск)
+CMD ["sh", "-c", "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"]
