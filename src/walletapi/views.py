@@ -60,7 +60,7 @@ def perform_operation(request, wallet_uuid):
             # Проверка, что amount передан корректно (является положительным числом)
             try:
                 amount = Decimal(amount)
-                if amount <= 0:
+                if amount < 0:
                     raise ValueError()
             except (ValueError, TypeError):
                 return Response({'error': ERROR_MESSAGES["invalid_amount"]},
@@ -69,11 +69,13 @@ def perform_operation(request, wallet_uuid):
             # Выполнение операции
             if operation_type == OperationType.DEPOSIT:
                 wallet.balance += amount
+
             elif operation_type == OperationType.WITHDRAW:
                 if wallet.balance < amount:
                     return Response({'error': ERROR_MESSAGES["insufficient_funds"]},
                                     status=status.HTTP_400_BAD_REQUEST)
                 wallet.balance -= amount
+                wallet.save()
             wallet.save()
 
             # Формируем успешный ответ с обновленным балансом
