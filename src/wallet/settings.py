@@ -78,11 +78,14 @@ WSGI_APPLICATION = 'wallet.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'wallet_db',
-        'USER': 'user',
-        'PASSWORD': 'wallet_ps',
-        'HOST': 'db',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
+        'HOST': 'localhost',
         'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'utf8',
+        }
     }
 }
 
@@ -128,5 +131,3 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
-
-

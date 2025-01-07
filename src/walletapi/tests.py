@@ -1,90 +1,87 @@
-import os
-
-from wallet import settings
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "wallet.settings")
-
-from django.apps import apps
-
-apps.populate(settings.INSTALLED_APPS)
-
-import os
-
-from rest_framework.test import APITestCase, APIClient
+import pytest
 from rest_framework import status
-from django.contrib.auth.models import User
+from rest_framework.test import APIClient
 from .models import Wallet
+from django.contrib.auth.models import User
 from decimal import Decimal
-from rest_framework.authtoken.models import Token
+import uuid
 
 
-class WalletAPITestCase(APITestCase):
-    def setUp(self):
-        # Создаем пользователей
-        self.user = User.objects.create_user(username='testuser', password='password123')
-        self.other_user = User.objects.create_user(username='otheruser', password='password456')
+import os
+import django
 
-        # Генерируем токен для пользователя
-        self.token = Token.objects.create(user=self.user)
+os.environ['DJANGO_SETTINGS_MODULE'] = 'wallet.settings'
+django.setup()
 
-        # Инициализируем клиента
+
+@pytest.mark.django_db
+class TestWalletEndpoints:
+
+    def setup_method(self):
         self.client = APIClient()
-        self.client.credentials(HTTP_AUTHORIZATION='Token ' + self.token.key)
-
-        # Создаем тестовые кошельки
-        self.wallet = Wallet.objects.create(user=self.user, balance=Decimal("1000.00"))
-        self.other_wallet = Wallet.objects.create(user=self.other_user, balance=Decimal("500.00"))
-
-        # URLs для тестов
-        self.wallet_list_url = '/api/v1/wallets/'  # Получение списка кошельков
-        self.operation_url = f'/api/v1/wallets/{self.wallet.uuid}/operation/'
-
-    def test_list_wallets(self):
-        """Тест: Получение списка кошельков текущего авторизованного пользователя."""
-        response = self.client.get(self.wallet_list_url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)  # Только один кошелёк принадлежит self.user
+        self.user = User.objects.create_user(username='testuser', password='testpass')
+        self.client.force_authenticate(user=self.user)
+        self.wallet = Wallet.objects.create(user=self.user, balance=Decimal('100.00'), uuid=uuid.uuid4())
 
     def test_create_wallet(self):
-        """Тест: Создание нового кошелька."""
-        data = {"balance": "500.00"}
-        response = self.client.post(self.wallet_list_url, data)
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(Wallet.objects.filter(user=self.user).count(), 2)  # Теперь два кошелька
+        response = self.client.post('/api/v1/wallets/', {'balance': '50.00'})
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Wallet.objects.count() == 2  # Проверка создания нового кошелька
+        assert Wallet.objects.last().balance == Decimal('50.00')
+
+    def test_list_wallets(self):
+        response = self.client.get('/api/v1/wallets/')
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1  # Должен вернуть только кошелек текущего пользователя
+
+    def test_wallet_detail(self):
+        response = self.client.get(f'/api/v1/wallets/{self.wallet.uuid}/')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['balance'] == str(self.wallet.balance)
+
+    def test_wallet_detail_permission_denied(self):
+        another_user = User.objects.create_user(username='anotheruser', password='anotherpass')
+        self.client.force_authenticate(user=another_user)
+        response = self.client.get(f'/api/v1/wallets/{self.wallet.uuid}/')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_perform_deposit(self):
-        """Тест: Успешное пополнение баланса кошелька."""
-        data = {"operationType": "DEPOSIT", "amount": "200.00"}
-        response = self.client.post(self.operation_url, data)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        response = self.client.post(f'/api/v1/wallets/{self.wallet.uuid}/operation/', {
+            'operationType': 'DEPOSIT',
+            'amount': '50.00'
+        })
+        assert response.status_code == status.HTTP_200_OK
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, Decimal("1200.00"))  # 1000 + 200
+        assert self.wallet.balance == Decimal('150.00')
 
     def test_perform_withdraw(self):
-        """Тест: Успешное снятие средств с кошелька."""
-        data = {"operationType": "WITHDRAW", "amount": "300.00"}
-        response = self.client.post(self.operation_url, data)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        response = self.client.post(f'/api/v1/wallets/{self.wallet.uuid}/operation/', {
+            'operationType': 'WITHDRAW',
+            'amount': '30.00'
+        })
+        assert response.status_code == status.HTTP_200_OK
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, Decimal("700.00"))  # 1000 - 300
+        assert self.wallet.balance == Decimal('70.00')
 
-    def test_withdraw_insufficient_funds(self):
-        """Тест: Ошибка при снятии суммы больше баланса."""
-        data = {"operationType": "WITHDRAW", "amount": "1500.00"}
-        response = self.client.post(self.operation_url, data)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+    def test_perform_withdraw_insufficient_funds(self):
+        response = self.client.post(f'/api/v1/wallets/{self.wallet.uuid}/operation/', {
+            'operationType': 'WITHDRAW',
+            'amount': '200.00'  # Запрос на вывод больше чем баланс
+        })
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
         self.wallet.refresh_from_db()
-        self.assertEqual(self.wallet.balance, Decimal("1000.00"))  # Баланс не изменён
+        assert self.wallet.balance == Decimal('100.00')  # Баланс не изменился
 
-    def test_access_other_user_wallet(self):
-        """Тест: Попытка выполнить операцию с чужим кошельком."""
-        other_wallet_operation_url = f'/api/v1/wallets/{self.other_wallet.uuid}/operation/'
-        data = {"operationType": "DEPOSIT", "amount": "100.00"}
-        response = self.client.post(other_wallet_operation_url, data)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    def test_perform_operation_invalid_type(self):
+        response = self.client.post(f'/api/v1/wallets/{self.wallet.uuid}/operation/', {
+            'operationType': 'INVALID_OPERATION',
+            'amount': '50.00'
+        })
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_unauthorized_access(self):
-        """Тест: Запрос без аутентификации."""
-        self.client.credentials()  # Сбрасываем заголовки аутентификации
-        response = self.client.get(self.wallet_list_url)
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    def test_perform_operation_invalid_amount(self):
+        response = self.client.post(f'/api/v1/wallets/{self.wallet.uuid}/operation/', {
+            'operationType': 'DEPOSIT',
+            'amount': '-50.00'
+        })
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
